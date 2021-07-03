@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/PaulSonOfLars/gotgbot/v2"
 )
 
@@ -24,6 +27,18 @@ type Updater struct {
 	running bool
 	server  *http.Server
 }
+
+var (
+	totalUpdates = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gotgbot_updates_total",
+			Help: "Number of incoming updates.",
+		},
+		[]string{
+			"mode",
+		},
+	)
+)
 
 var errorLog = log.New(os.Stderr, "ERROR", log.LstdFlags)
 
@@ -152,6 +167,7 @@ func (u *Updater) pollingLoop(b gotgbot.Bot, dropPendingUpdates bool, v url.Valu
 		}
 
 		for _, updData := range rawUpdates {
+			totalUpdates.With(prometheus.Labels{"mode": "polling"}).Inc()
 			temp := updData // use new mem address to avoid loop conflicts
 			u.UpdateChan <- temp
 		}
@@ -204,6 +220,8 @@ func (u *Updater) StartWebhook(b *gotgbot.Bot, opts WebhookOpts) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/"+opts.URLPath, func(w http.ResponseWriter, r *http.Request) {
+		totalUpdates.With(prometheus.Labels{"mode": "webhook"}).Inc()
+
 		bytes, _ := ioutil.ReadAll(r.Body)
 		u.UpdateChan <- bytes
 	})

@@ -9,7 +9,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const (
@@ -19,6 +23,52 @@ const (
 	DefaultGetTimeout = time.Second * 3
 	// DefaultPostTimeout is the default timeout to be set for a POST request.
 	DefaultPostTimeout = time.Second * 10
+)
+
+var (
+	totalRequests = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gotgbot_requests_total",
+			Help: "Number of requests made to the bot API.",
+		},
+		[]string{
+			"http_method",
+			"api_method",
+		},
+	)
+	totalHTTPErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gotgbot_http_request_errors_total",
+			Help: "Number of HTTP errors obtained.",
+		},
+		[]string{
+			"http_method",
+			"api_method",
+		},
+	)
+	totalAPIErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gotgbot_api_request_errors_total",
+			Help: "Number of bot API errors obtained.",
+		},
+		[]string{
+			"http_method",
+			"api_method",
+			"http_status_code",
+			"api_status_code",
+			"description",
+		},
+	)
+	requestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "gotgbot_api_request_time_seconds",
+			Help: "Duration of requests made to the bot API.",
+		},
+		[]string{
+			"http_method",
+			"api_method",
+		},
+	)
 )
 
 type Response struct {
@@ -84,8 +134,22 @@ func (bot *Bot) GetWithContext(ctx context.Context, method string, params url.Va
 
 	req.URL.RawQuery = params.Encode()
 
+	totalRequests.With(prometheus.Labels{
+		"http_method": "GET",
+		"api_method":  method,
+	}).Inc()
+
+	timer := prometheus.NewTimer(requestDuration.With(prometheus.Labels{
+		"http_method": "GET",
+		"api_method":  method,
+	}))
 	resp, err := bot.Client.Do(req)
+	timer.ObserveDuration()
 	if err != nil {
+		totalHTTPErrors.With(prometheus.Labels{
+			"http_method": "GET",
+			"api_method":  method,
+		})
 		return nil, fmt.Errorf("failed to execute GET request to %s: %w", method, err)
 	}
 	defer resp.Body.Close()
@@ -96,6 +160,13 @@ func (bot *Bot) GetWithContext(ctx context.Context, method string, params url.Va
 	}
 
 	if !r.Ok {
+		totalAPIErrors.With(prometheus.Labels{
+			"http_method":      "GET",
+			"api_method":       method,
+			"http_status_code": strconv.Itoa(resp.StatusCode),
+			"api_status_code":  strconv.Itoa(r.ErrorCode),
+			"description":      r.Description,
+		})
 		return nil, &TelegramError{
 			Method:      method,
 			Params:      params,
@@ -139,8 +210,17 @@ func (bot *Bot) PostWithContext(ctx context.Context, method string, params url.V
 	req.URL.RawQuery = params.Encode()
 	req.Header.Set("Content-Type", contentType)
 
+	totalRequests.With(prometheus.Labels{
+		"http_method": "POST",
+		"api_method":  method,
+	}).Inc()
+
 	resp, err := bot.Client.Do(req)
 	if err != nil {
+		totalHTTPErrors.With(prometheus.Labels{
+			"http_method": "POST",
+			"api_method":  method,
+		})
 		return nil, fmt.Errorf("failed to execute POST request to %s: %w", method, err)
 	}
 	defer resp.Body.Close()
@@ -151,6 +231,13 @@ func (bot *Bot) PostWithContext(ctx context.Context, method string, params url.V
 	}
 
 	if !r.Ok {
+		totalAPIErrors.With(prometheus.Labels{
+			"http_method":      "POST",
+			"api_method":       method,
+			"http_status_code": strconv.Itoa(resp.StatusCode),
+			"api_status_code":  strconv.Itoa(r.ErrorCode),
+			"description":      r.Description,
+		})
 		return nil, &TelegramError{
 			Method:      method,
 			Params:      params,

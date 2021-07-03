@@ -8,6 +8,9 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/PaulSonOfLars/gotgbot/v2"
 )
 
@@ -34,6 +37,15 @@ const (
 
 var EndGroups = errors.New("group iteration ended")
 var ContinueGroups = errors.New("group iteration continued")
+
+var (
+	updateProcessingDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "gotgbot_update_processing_time_seconds",
+			Help: "Time to process each update",
+		},
+	)
+)
 
 type Dispatcher struct {
 	// Error handles any errors that occur during handler execution. The return type determines how to handle the
@@ -187,6 +199,9 @@ func (d *Dispatcher) ProcessRawUpdate(b *gotgbot.Bot, r json.RawMessage) {
 // ProcessUpdate iterates over the list of groups to execute the matching handlers.
 func (d *Dispatcher) ProcessUpdate(b *gotgbot.Bot, update *gotgbot.Update, data map[string]interface{}) {
 	var ctx *Context
+
+	timer := prometheus.NewTimer(updateProcessingDuration)
+	defer timer.ObserveDuration()
 
 	defer func() {
 		if r := recover(); r != nil {
